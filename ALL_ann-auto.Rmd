@@ -1,0 +1,139 @@
+---
+title: "all_auto_ann"
+output: html_document
+date: "2025-03-10"
+---
+
+```{r setup, include=FALSE}
+# Install necessary packages
+#install.packages("Seurat")
+#install.packages("remotes")
+#remotes::install_github("satijalab/azimuth")
+#remotes::install_github('satijalab/seurat-wrappers')
+#if (!require("BiocManager", quietly = TRUE))
+   # install.packages("BiocManager")
+
+#BiocManager::install("zellkonverter")
+```
+
+
+```{r pressure, echo=FALSE}
+# Load necessary libraries
+library(zellkonverter)
+library(Seurat)
+library(SeuratWrappers)
+library(Azimuth)
+library(Matrix)
+```
+
+```{r pressure, echo=FALSE}
+# Load our integrated dataset
+all_int <- readRDS("ALL_int_data.rds")
+```
+
+```{r}
+# Load expression matrix
+expression_matrix <- readMM("data/Olalekan2021_Ovarian/Exp_data_UMIcounts.mtx")
+```
+
+```{r}
+# Load gene and cell metadata
+genes <- read.table("data/Olalekan2021_Ovarian/Genes.txt", header = FALSE, stringsAsFactors = FALSE)
+cells <- read.csv("data/Olalekan2021_Ovarian/Cells.csv")
+```
+
+```{r}
+# Assign row and column names to the matrix
+rownames(expression_matrix) <- genes$V1
+colnames(expression_matrix) <- cells$Cell_ID
+# Create a Seurat object
+ref_seurat_object <- CreateSeuratObject(counts = expression_matrix, meta.data = cells)
+```
+
+```{r}
+# Normalize
+ref_seurat_object <- NormalizeData(ref_seurat_object)
+
+# Run PCA again
+ref_seurat_object <- FindVariableFeatures(ref_seurat_object, verbose = FALSE)
+ref_seurat_object <- ScaleData(ref_seurat_object, verbose = FALSE)
+ref_seurat_object <- RunPCA(ref_seurat_object, npcs = 50, verbose = FALSE)
+
+# Re-run UMAP
+ref_seurat_object <- RunUMAP(ref_seurat_object, dims = 1:20, verbose = FALSE)
+ref_seurat_object <- FindNeighbors(ref_seurat_object, dims = 1:20, verbose = FALSE)
+ref_seurat_object <- FindClusters(ref_seurat_object, resolution = 0.6, verbose = FALSE)
+
+# Now plot the integrated UMAP
+DimPlot(ref_seurat_object, reduction = "umap", label = TRUE, repel = TRUE)
+DimPlot(ref_seurat_object, reduction = "umap", group.by="cell_type")
+```
+
+```{r}
+DimPlot(all_int, reduction = "umap", label = TRUE, repel = TRUE)
+DimPlot(all_int, reduction = "umap", group.by="sample")
+```
+
+
+```{r}
+#Seurat pipeline
+test_anchors <- FindTransferAnchors(reference = ref_seurat_object, query = all_int, dims = 1:30)
+predictions <- TransferData(anchorset = test_anchors, refdata = ref_seurat_object$cell_type, dims = 1:30)
+all_int <- AddMetaData(all_int, metadata = predictions)
+all_int$LABELTRANSFER <- all_int$predicted.id
+a <- DimPlot(all_int, reduction = "umap", label = TRUE, repel = TRUE)
+b <- DimPlot(all_int, group.by = "LABELTRANSFER", label = T)
+a + b
+
+pdf("ALL_annotated.pdf", width = 24, height = 12)
+print(a + b)
+dev.off()
+
+saveRDS(all_int, "ALL_ann-auto_data.rds")
+```
+```{r}
+# CHECK by overlaying with manual+annotated primary/relapse datasets
+# Load data
+p_int <- readRDS("PRIMARY_ann_int_data.rds")
+r_int <- readRDS("RELAPSE_ann_int_data.rds")
+```
+
+```{r}
+# Extract labels from p_int
+primary_labels <- Idents(p_int)
+
+# Check the distribution of labels
+table(primary_labels)
+```
+
+```{r}
+# Initialize a new metadata column in all_int for annotations
+all_int$manual_annotations <- NA  # Start with NA
+
+# Map primary sample labels to all_int
+primary_cells <- colnames(p_int)  # Get cell names from p_int
+all_int$manual_annotations[primary_cells] <- as.character(primary_labels)
+```
+
+```{r}
+# Extract labels from r_int
+relapse_labels <- Idents(r_int)
+
+# Map relapse sample labels to all_int
+relapse_cells <- colnames(r_int)  # Get cell names from r_int
+all_int$manual_annotations[relapse_cells] <- as.character(relapse_labels)
+```
+
+```{r}
+# Convert manual_annotations to a factor
+all_int$manual_annotations <- factor(all_int$manual_annotations)
+
+# Update Idents slot with the new annotations
+Idents(all_int) <- all_int$manual_annotations
+```
+
+```{r}
+DimPlot(all_int, reduction = "umap", label = TRUE, group.by = "manual_annotations") + NoLegend()
+
+```
+

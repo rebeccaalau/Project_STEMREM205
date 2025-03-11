@@ -1,0 +1,239 @@
+---
+title: "sc-integration_primary"
+output:
+  html_document:
+    df_print: paged
+date: "2025-03-07"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+# Load necessary libraries
+library(Seurat)
+library(dplyr)
+library(ggplot2)
+```
+
+```{r pressure, echo=FALSE}
+# Load data
+p1.data <- read.table(gzfile("data/GSM3729170_P1_dge.txt.gz"), header = TRUE, row.names = 1)
+p2.data <- read.table(gzfile("data/GSM3729171_P2_dge.txt.gz"), header = TRUE, row.names = 1)
+p3.data <- read.table(gzfile("data/GSM3729172_P3_dge.txt.gz"), header = TRUE, row.names = 1)
+p4.data <- read.table(gzfile("data/GSM3729173_P4_dge.txt.gz"), header = TRUE, row.names = 1)
+```
+
+```{r pressure, echo=FALSE}
+# Convert to Seurat objects
+p1 <- CreateSeuratObject(counts = p1.data, project = "p1")
+p2 <- CreateSeuratObject(counts = p2.data, project = "p2")
+p3 <- CreateSeuratObject(counts = p3.data, project = "p3")
+p4 <- CreateSeuratObject(counts = p4.data, project = "p4")
+
+# Check the objects
+p1
+p2
+p3
+p4
+```
+
+```{r pressure, echo=FALSE}
+# Calculate % of mitochondrial genes
+p1[["percent.mt"]] <- PercentageFeatureSet(p1, pattern = "^MT-")
+p2[["percent.mt"]] <- PercentageFeatureSet(p2, pattern = "^MT-")
+p3[["percent.mt"]] <- PercentageFeatureSet(p3, pattern = "^MT-")
+p4[["percent.mt"]] <- PercentageFeatureSet(p4, pattern = "^MT-")
+
+# Apply QC filtering (same as class code)
+p1 <- subset(p1, subset = nFeature_RNA > 200 & percent.mt < 10)
+p2 <- subset(p2, subset = nFeature_RNA > 200 & percent.mt < 10)
+p3 <- subset(p3, subset = nFeature_RNA > 200 & percent.mt < 10)
+p4 <- subset(p4, subset = nFeature_RNA > 200 & percent.mt < 10)
+
+# Check final number of cells
+ncol(p1)
+ncol(p2)
+ncol(p3)
+ncol(p4)
+```
+
+```{r pressure, echo=FALSE}
+# Normalize
+p1 <- NormalizeData(p1, verbose = FALSE)
+p2 <- NormalizeData(p2, verbose = FALSE)
+p3 <- NormalizeData(p3, verbose = FALSE)
+p4 <- NormalizeData(p4, verbose = FALSE)
+
+# Identify variable features
+p1 <- FindVariableFeatures(p1, verbose = FALSE)
+p2 <- FindVariableFeatures(p2, verbose = FALSE)
+p3 <- FindVariableFeatures(p3, verbose = FALSE)
+p4 <- FindVariableFeatures(p4, verbose = FALSE)
+
+# Scale the data
+p1 <- ScaleData(p1, verbose = FALSE)
+p2 <- ScaleData(p2, verbose = FALSE)
+p3 <- ScaleData(p3, verbose = FALSE)
+p4 <- ScaleData(p4, verbose = FALSE)
+```
+
+```{r pressure, echo=FALSE}
+# PCA
+p1 <- RunPCA(p1, verbose = FALSE)
+p2 <- RunPCA(p2, verbose = FALSE)
+p3 <- RunPCA(p3, verbose = FALSE)
+p4 <- RunPCA(p4, verbose = FALSE)
+
+# UMAP
+p1 <- RunUMAP(p1, dims = 1:15, verbose = FALSE)
+p2 <- RunUMAP(p2, dims = 1:15, verbose = FALSE)
+p3 <- RunUMAP(p3, dims = 1:15, verbose = FALSE)
+p4 <- RunUMAP(p4, dims = 1:15, verbose = FALSE)
+
+# Find clusters
+p1 <- FindNeighbors(p1, dims = 1:15, verbose = FALSE)
+p2 <- FindNeighbors(p2, dims = 1:15, verbose = FALSE)
+p3 <- FindNeighbors(p3, dims = 1:15, verbose = FALSE)
+p4 <- FindNeighbors(p4, dims = 1:15, verbose = FALSE)
+
+# Find neighbors
+p1 <- FindClusters(p1, resolution = 0.5, verbose = FALSE)
+p2 <- FindClusters(p2, resolution = 0.5, verbose = FALSE)
+p3 <- FindClusters(p3, resolution = 0.5, verbose = FALSE)
+p4 <- FindClusters(p4, resolution = 0.5, verbose = FALSE)
+
+# Plot UMAP
+DimPlot(p1, reduction = "umap", label = TRUE, repel = TRUE)
+DimPlot(p2, reduction = "umap", label = TRUE, repel = TRUE)
+DimPlot(p3, reduction = "umap", label = TRUE, repel = TRUE)
+DimPlot(p4, reduction = "umap", label = TRUE, repel = TRUE)
+```
+
+```{r}
+# Label datasets for tracking
+p1@meta.data$sample <- "P1"
+p2@meta.data$sample <- "P2"
+p3@meta.data$sample <- "P3"
+p4@meta.data$sample <- "P4"
+
+# Merge datasets
+p_merge <- merge(p1, y = c(p2, p3, p4))
+
+# Standard QC pipeline
+p_merge <- NormalizeData(p_merge, verbose = FALSE)
+p_merge <- FindVariableFeatures(p_merge, verbose = FALSE)
+p_merge <- ScaleData(p_merge, verbose = FALSE)
+p_merge <- RunPCA(p_merge, npcs = 50, verbose = FALSE)
+p_merge <- RunUMAP(p_merge, dims = 1:20, verbose = FALSE)
+
+# Visualize merged dataset
+DimPlot(p_merge, reduction = "umap", label = TRUE, repel = TRUE)
+DimPlot(p_merge, reduction = "umap", group.by="sample")
+```
+
+```{r}
+# Store objects in a list
+objlist <- list(p1, p2, p3, p4)
+
+# Find common variable features
+features <- SelectIntegrationFeatures(object.list = objlist)
+
+# Find integration anchors
+anchors <- FindIntegrationAnchors(object.list = objlist, anchor.features = features)
+
+# Integrate the datasets
+p_int <- IntegrateData(anchorset = anchors)
+p_int[["RNA"]] <- JoinLayers(p_int[["RNA"]])
+# Set the default assay to the integrated dataset
+DefaultAssay(p_int) <- "integrated"
+
+```
+```{r}
+# Standard QC pipeline
+# Run PCA again
+p_int <- ScaleData(p_int, verbose = FALSE)
+p_int <- RunPCA(p_int, npcs = 50, verbose = FALSE)
+
+# Re-run UMAP
+p_int <- RunUMAP(p_int, dims = 1:20, verbose = FALSE)
+p_int <- FindNeighbors(p_int, dims = 1:20, verbose = FALSE)
+p_int <- FindClusters(p_int, resolution = 0.5, verbose = FALSE)
+
+# Now plot the integrated UMAP
+DimPlot(p_int, reduction = "umap", label = TRUE, repel = TRUE)
+DimPlot(p_int, reduction = "umap", group.by="sample")
+```
+
+```{r}
+#remotes::install_github("PMBio/MuDataSeurat")
+#remotes::install_github("mojaveazure/seurat-disk")
+```
+```{r}
+library(MuDataSeurat)
+library(SeuratDisk)
+
+saveRDS(p_int, "primary_int_data.rds")
+```
+```{r}
+# Find marker genes for each cluster
+markers <- FindAllMarkers(
+  object = p_int,
+  only.pos = TRUE,        # Only return positive markers
+  min.pct = 0.25,         # Minimum fraction of cells expressing the gene
+  logfc.threshold = 0.25  # Minimum log fold change threshold
+)
+write.csv(markers, file = "PRIMARY_all_marker_genes.csv", row.names = FALSE)
+```
+```{r}
+# View top markers
+head(markers)
+top3 <- markers %>% group_by(cluster) %>% top_n(n = 3, wt = avg_log2FC)
+
+
+DotPlot(p_int, features = unique(top3$gene), cols = c("white", "darkred"), dot.scale = 3) +
+    RotatedAxis() +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+    ggtitle("Top Marker Genes by Cluster") +
+    xlab("Marker Genes") +
+    ylab("Clusters")
+```
+
+```{r}
+top10 <- markers %>% 
+    group_by(cluster) %>% 
+    top_n(n = 10, wt = avg_log2FC)
+print(top10)
+write.csv(top10, file = "PRIMARY_top_10_primary_marker_genes.csv", row.names = FALSE)
+
+```
+
+```{r}
+# 0 = Dormant
+# 1 = Migratory
+# 2 = Chemoresistant
+# 3 = Fibroblast
+# 4 = Proliferative
+# 5 = CSC
+# 6 = Fibroblast
+# 7 = T/B cell
+# 8 = Monocyte
+# 9 = MSC
+# 10 = Endothelial
+
+new.cluster.ids <- c("Dormant", 'Migratory', "Chemoresistant", 
+                     'Fibroblast', 'Proliferative', 'CSC',
+                     'Fibroblast', "T/B cell", 'Monocyte', 
+                     'MSC','Endothelial'
+                     )
+names(new.cluster.ids) <- levels(p_int)
+p_int <- RenameIdents(p_int, new.cluster.ids)
+
+# plot umap with renamed clusters
+DimPlot(p_int, reduction = "umap", label = TRUE, pt.size = 0.5) + NoLegend()
+```
+```{r}
+# Save the Seurat object as an RDS file
+saveRDS(p_int, file = "PRIMARY_ann_int_data.rds")
+DimPlot(p_int, reduction = "umap", label = TRUE, pt.size = 0.5) + NoLegend()
+dev.off()
+```
+
