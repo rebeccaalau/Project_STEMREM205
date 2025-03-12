@@ -1,0 +1,512 @@
+---
+title: "ssGSEA_V2"
+output: html_document
+date: "2025-03-11"
+---
+
+```{r setup, include=FALSE}
+#install.packages("pheatmap")
+#install.packages("BiocManager")
+# Load necessary libraries
+library(Seurat)
+library(GSVA)
+library(msigdbr)
+library(dplyr)
+library(fgsea)
+library(matrixStats)
+```
+
+```{r}
+# Load your data
+all_int <- readRDS('ALL_ann_int_data.rds')
+exprMatrix <- LayerData(all_int, assay = "RNA", layer = "data")
+
+# Convert to dense matrix if necessary
+exprMatrix_dense <- as.matrix(exprMatrix)
+
+# Calculate row variances
+row_vars <- rowVars(exprMatrix_dense)
+
+# Select top 5000 genes by variance
+sorted_indices <- order(row_vars, decreasing = TRUE)
+top_indices <- sorted_indices[1:5000]
+top_genes <- rownames(exprMatrix_dense)[top_indices]
+
+# Check row names of exprMatrix_dense
+print(rownames(exprMatrix_dense)[1:10])  # Print the first 10 row names of exprMatrix_dense
+print(top_genes[1:10])  # Print the first 10 genes for inspection
+
+# Validate gene selection
+matching_genes <- intersect(top_genes, rownames(exprMatrix_dense))
+print(length(matching_genes))  # Check how many genes match
+
+# Recreate exprMatrix_subset if there are matching genes
+if (length(matching_genes) > 0) {
+  exprMatrix_subset <- exprMatrix_dense[matching_genes, ]
+  rownames(exprMatrix_subset) <- matching_genes
+
+  # Check the structure and contents of exprMatrix_subset
+  str(exprMatrix_subset)
+  summary(exprMatrix_subset)
+  exprMatrix_subset[1:5, 1:5]  # Display the first 5 rows and columns for inspection
+} else {
+  print("No matching genes found.")
+}
+```
+
+```{r}
+# Load gene sets - Hallmark gene set
+Hallmark <- msigdbr(species = "Homo sapiens", category = "H")
+Hallmark_gene_sets <- split(Hallmark$gene_symbol, Hallmark$gs_name)
+colnames(Hallmark)
+
+ssgsea_param <- ssgseaParam(exprData = exprMatrix_subset, geneSets = Hallmark_gene_sets)
+ssGSEA_scores <- gsva(ssgsea_param)
+
+```
+
+```{r}
+# Analyze pathways among ALL samples
+
+# Install and load superheat
+#install.packages("superheat")
+library(superheat)
+
+# Scale rows of ssGSEA_scores
+scaled_ssGSEA <- apply(ssGSEA_scores, 1, function(x) (x - mean(x)) / sd(x))
+
+# Visualize using superheat
+#superheat(scaled_ssGSEA, 
+          #scale = TRUE, 
+          #row.dendrogram = TRUE, 
+          #col.dendrogram = TRUE)
+```
+
+```{r}
+# Subset primary and relapse samples
+p_int <- readRDS('PRIMARY_ann_int_data.rds')
+r_int <- readRDS('RELAPSE_ann_int_data.rds')
+
+exprMatrix_primary <- LayerData(p_int, assay = "RNA", layer = "data")
+
+# Convert sparse matrix to dense matrix (if necessary)
+exprMatrix_primary_dense <- as.matrix(exprMatrix_primary)
+
+# Calculate row variances
+row_vars_primary <- rowVars(exprMatrix_primary_dense)
+
+# Select top 5000 genes by variance
+sorted_indices_primary <- order(row_vars_primary, decreasing = TRUE)
+top_indices_primary <- sorted_indices_primary[1:5000]
+top_genes_primary <- rownames(exprMatrix_primary_dense)[top_indices_primary]
+
+# Validate gene selection
+matching_genes_primary <- intersect(top_genes_primary, rownames(exprMatrix_primary_dense))
+print(length(matching_genes_primary))  # Check how many genes match
+
+# Create subset of expression matrix with matching genes
+if (length(matching_genes_primary) > 0) {
+  exprMatrix_subset_primary <- exprMatrix_primary_dense[matching_genes_primary, ]
+  rownames(exprMatrix_subset_primary) <- matching_genes_primary
+} else {
+  stop("No matching genes found.")
+}
+
+ssgsea_param_primary <- ssgseaParam(exprData = exprMatrix_subset_primary, geneSets = Hallmark_gene_sets)
+ssGSEA_scores_primary <- gsva(ssgsea_param_primary)
+
+```
+
+```{r}
+# Extract expression data and convert to dense matrix
+exprMatrix_relapse <- LayerData(r_int, assay = "RNA", layer = "data")
+exprMatrix_relapse_dense <- as.matrix(exprMatrix_relapse)
+
+# Select top genes by variance and create subset matrix
+row_vars_relapse <- rowVars(exprMatrix_relapse_dense)
+sorted_indices_relapse <- order(row_vars_relapse, decreasing = TRUE)
+top_indices_relapse <- sorted_indices_relapse[1:5000]
+top_genes_relapse <- rownames(exprMatrix_relapse_dense)[top_indices_relapse]
+matching_genes_relapse <- intersect(top_genes_relapse, rownames(exprMatrix_relapse_dense))
+
+if (length(matching_genes_relapse) > 0) {
+  exprMatrix_subset_relapse <- exprMatrix_relapse_dense[matching_genes_relapse, ]
+  rownames(exprMatrix_subset_relapse) <- matching_genes_relapse
+  
+  # Create ssGSEA parameter object for relapse samples
+  ssgsea_param_relapse <- ssgseaParam(exprData = exprMatrix_subset_relapse, geneSets = Hallmark_gene_sets)
+  
+  # Perform ssGSEA for relapse samples
+  ssGSEA_scores_relapse <- gsva(ssgsea_param_relapse)
+}
+```
+
+```{r}
+library(pheatmap)
+
+# Scale rows of ssGSEA scores for better visualization
+scaled_ssGSEA_primary <- apply(ssGSEA_scores_primary, 1, function(x) (x - mean(x)) / sd(x))
+
+# Create heatmap of pathway activity for primary samples
+#pheatmap(scaled_ssGSEA_primary, 
+         #cluster_rows = TRUE, 
+         #cluster_cols = TRUE, 
+         #show_rownames = TRUE, 
+         #show_colnames = FALSE,
+         #scale = "row")
+```
+
+```{r}
+# Subset both matrices to include only matching pathways
+ssGSEA_scores_primary <- ssGSEA_scores_primary[matching_pathways, ]
+ssGSEA_scores_relapse <- ssGSEA_scores_relapse[matching_pathways, ]
+
+# Define a threshold for minimum non-missing observations
+threshold <- 4
+
+# Identify valid pathways
+valid_pathways <- which((ncol(ssGSEA_scores_primary) - missing_primary >= threshold) &
+                        (ncol(ssGSEA_scores_relapse) - missing_relapse >= threshold))
+
+# Subset the matrices to include only valid pathways
+filtered_primary <- ssGSEA_scores_primary[valid_pathways, ]
+filtered_relapse <- ssGSEA_scores_relapse[valid_pathways, ]
+
+# Check dimensions of filtered matrices
+dim(filtered_primary)
+dim(filtered_relapse)
+
+p_values <- sapply(rownames(filtered_primary), function(pathway) {
+    tryCatch({
+        wilcox.test(filtered_primary[pathway, ], filtered_relapse[pathway, ])$p.value
+    }, error = function(e) NA)  # Return NA if an error occurs
+})
+
+
+# Adjust p-values for multiple testing (FDR correction)
+adjusted_p_values <- p.adjust(p_values, method = "fdr")
+
+# Identify significantly different pathways
+significant_pathways <- rownames(filtered_primary)[adjusted_p_values < 0.05]
+print(significant_pathways)
+
+length(significant_pathways)
+```
+
+```{r}
+# Subset ssGSEA scores for significant pathways
+subset_primary <- filtered_primary[significant_pathways, ]
+subset_relapse <- filtered_relapse[significant_pathways, ]
+
+# Check for duplicate column names
+duplicates_primary <- duplicated(colnames(subset_primary))
+duplicates_relapse <- duplicated(colnames(subset_relapse))
+
+# Print duplicate column names (if any)
+if (any(duplicates_primary)) {
+    print("Duplicate column names in primary:")
+    print(colnames(subset_primary)[duplicates_primary])
+}
+
+if (any(duplicates_relapse)) {
+    print("Duplicate column names in relapse:")
+    print(colnames(subset_relapse)[duplicates_relapse])
+}
+
+# Append suffixes to primary and relapse sample names to ensure uniqueness
+colnames(subset_primary) <- paste0(colnames(subset_primary), "_Primary")
+colnames(subset_relapse) <- paste0(colnames(subset_relapse), "_Relapse")
+
+# Combine primary and relapse matrices
+combined_subset <- cbind(subset_primary, subset_relapse)
+
+# Verify that column names are now unique
+if (any(duplicated(colnames(combined_subset)))) {
+    stop("Column names are still not unique!")
+} else {
+    print("Column names are unique.")
+}
+
+# Ensure sample_groups matches the number of columns in combined_subset
+sample_groups <- c(rep("Primary", ncol(subset_primary)), rep("Relapse", ncol(subset_relapse)))
+
+# Check dimensions
+print(dim(combined_subset))  # Should match length(sample_groups)
+print(length(sample_groups))  # Should match ncol(combined_subset)
+
+any(duplicated(rownames(combined_subset)))  # Should return FALSE
+
+# Ensure scaled_ssGSEA is properly scaled
+scaled_combined_subset <- apply(combined_subset, 1, function(x) (x - mean(x)) / sd(x))
+
+# Generate heatmap using superheat
+superheat(scaled_combined_subset, 
+          scale = TRUE,  # Scale rows for better visualization
+          row.dendrogram = TRUE,  # Cluster rows (pathways)
+          col.dendrogram = TRUE)  # Cluster columns (samples)
+
+```
+```{r}
+# Sort pathways by adjusted p-value and select top 5
+sorted_indices <- order(adjusted_p_values)
+top_10_pathways <- rownames(filtered_primary)[sorted_indices[1:10]]
+
+# Subset combined matrix for top pathways
+combined_subset_top <- combined_subset[top_10_pathways, ]
+
+```
+
+```{r}
+# Select top 5 pathways by adjusted p-value
+top_5_pathways <- rownames(filtered_primary)[sorted_indices[1:5]]
+
+# Subset combined matrix for top pathways
+#scaled_combined_subset_top <- scaled_combined_subset[top_5_pathways, ]
+
+# Transpose the matrix
+scaled_combined_subset <- t(scaled_combined_subset)
+
+# Verify dimensions
+dim(scaled_combined_subset)  # Should now be [number of pathways x number of samples]
+
+# Subset primary and relapse columns
+primary_indices <- 1:ncol(subset_primary)
+relapse_indices <- (ncol(subset_primary) + 1):ncol(scaled_combined_subset)
+
+# Calculate aggregated scores
+aggregated_scores <- data.frame(
+    Group = c("Primary", "Relapse"),
+    Mean_Score = c(rowMeans(scaled_combined_subset[, primary_indices], na.rm = TRUE),
+                   rowMeans(scaled_combined_subset[, relapse_indices], na.rm = TRUE)),
+    SD_Score = c(apply(scaled_combined_subset[, primary_indices], 1, sd, na.rm = TRUE),
+                 apply(scaled_combined_subset[, relapse_indices], 1, sd, na.rm = TRUE))
+)
+
+superheat(scaled_combined_subset,
+          scale = TRUE,
+          row.dendrogram = TRUE,
+          col.dendrogram = TRUE)
+
+# Use aggregated scores for visualization
+scaled_combined_subset_top <- aggregated_scores[top_5_pathways, ]
+
+# Generate heatmap using ComplexHeatmap
+Heatmap(scaled_combined_subset_top,
+        name = "Pathway Activity",
+        row_names_gp = gpar(fontsize = 10),
+        column_names_gp = gpar(fontsize = 10),
+        show_row_dend = TRUE,
+        show_column_dend = TRUE)
+```
+
+```{r}
+# Identify significant pathways
+significant_pathways <- rownames(filtered_primary)[adjusted_p_values < 0.05]
+print(significant_pathways)
+```
+
+# ```{r}
+# HALLMARK_ADIPOGENESIS
+# Adipocytes promote tumor growth, invasion, and metastasis by transferring nutrients and lipids to HGSOC cells.
+# https://www.nature.com/articles/s41419-024-07311-3 , https://pmc.ncbi.nlm.nih.gov/articles/PMC4157349/ 
+# 
+# HALLMARK_APICAL_JUNCTION
+# Apical junction pathways enhance EMT and angiogenesis.
+# https://pmc.ncbi.nlm.nih.gov/articles/PMC10607604/ 
+# 
+# HALLMARK_ANGIOGENESIS
+# Angiogenesis supports tumor growth and metastasis in HGSOC via VEGF secretion.
+# https://pmc.ncbi.nlm.nih.gov/articles/PMC6115937/
+# 
+# HALLMARK_APOPTOSIS
+# TP53 mutations in HGSOC disrupt apoptosis, contributing to tumor progression and therapy resistance.
+# https://pmc.ncbi.nlm.nih.gov/articles/PMC7573473/
+# 
+# HALLMARK_CHOLESTEROL_HOMEOSTASIS
+# Cholesterol biosynthesis is dysregulated in drug-resistant HGSOC cells, with increased uptake of exogenous cholesterol.
+# https://pmc.ncbi.nlm.nih.gov/articles/PMC7226826/
+# 
+# HALLMARK_GLYCOLYSIS
+# Glycolysis is elevated in late-stage resistant HGSOC, contributing to increased metabolic activity.
+# https://www.nature.com/articles/s41467-021-23171-3
+# 
+# HALLMARK_OXIDATIVE_PHOSPHORYLATION**
+# Oxidative phosphorylation is enriched in homologous recombination-deficient (HRD) HGSOC tumors.
+# https://www.nature.com/articles/s41698-024-00519-8
+# 
+# HALLMARK_WNT_BETA_CATENIN_SIGNALING**
+# Alterations in Wnt signaling affect stemness potential and organoid formation in HGSOC tissues.
+# https://www.embopress.org/doi/full/10.15252/embj.2019104013 
+# 
+# Other thoughts:
+# - Warburg effect (Glycolysis) - HGSOC cells exhibit aerobic glycolysis, enhancing glucose uptake and lactate production to fuel rapid proliferation and survival under hypoxic conditions. 
+# 
+# ** = chemoresistant
+# ```
+
+
+```{r}
+# Sort pathways by adjusted p-value and select top 5
+sorted_indices <- order(adjusted_p_values)
+top_50_pathways <- rownames(filtered_primary)[sorted_indices[1:50]]
+
+#print(top_10_pathways)
+```
+
+```{r}
+library(ggplot2)
+
+# Create boxplots for top pathways
+for (pathway in top_50_pathways) {
+    pathway_scores <- data.frame(
+        Score = c(filtered_primary[pathway, ], filtered_relapse[pathway, ]),
+        Group = c(rep("Primary", ncol(filtered_primary)), rep("Relapse", ncol(filtered_relapse)))
+    )
+    
+    # Create ggplot object
+    p <- ggplot(pathway_scores, aes(x = Group, y = Score, fill = Group)) +
+        geom_boxplot() +
+        theme_minimal() +
+        labs(title = paste("Pathway Activity:", pathway), y = "ssGSEA Score") +
+        scale_fill_manual(values = c("Primary" = "#56B4E9", "Relapse" = "#E69F00")) +
+        theme(plot.title = element_text(hjust = 0.5))
+    
+    # Save plot outside the loop
+    ggsave(filename = paste0(pathway, "_boxplot.png"), plot = p, width = 8, height = 6)
+}
+```
+
+<!-- Figure analysis: -->
+<!-- -  dot plot = visualizes Gene Ontology (GO) terms enriched for genes associated with the X_ADIPOGENESIS pathway. -->
+<!--       <> The x-axis = GeneRatio, which is the proportion of genes in the pathway that overlap with the specific GO term. -->
+<!--       <> Size of dots = Count (number of overlapping genes) -->
+<!--       <> Color = adjusted p-value (p.adjust), where darker red indicates stronger statistical significance. -->
+
+<!-- - box plot = ssGSEA score, which quantifies pathway activity within individual samples. -->
+
+<!-- FOR EXAMPLE: -->
+<!--   <> The dot plot highlights key metabolic processes involved in adipogenesis, emphasizing its role in energy production and lipid metabolism. -->
+
+<!--   <> The box plot suggests that adipogenesis pathway activity increases in relapsed tumors -->
+```{r}
+# Extract ssGSEA scores from all_int
+exprMatrix <- LayerData(all_int, assay = "RNA", layer = "data")
+
+# Subset top pathways (e.g., top 10 by variance)
+row_vars <- rowVars(exprMatrix_dense)
+top_pathways <- rownames(exprMatrix_dense)[order(row_vars, decreasing = TRUE)[1:10]]
+
+# Subset matrix for top pathways
+subset_ssGSEA <- exprMatrix_dense[top_pathways, ]
+```
+
+```{r}
+# Sort pathways by adjusted p-value and select top 20
+sorted_indices <- order(adjusted_p_values)
+top_20_pathways <- rownames(filtered_primary)[sorted_indices[1:20]]
+
+# Subset matrix for top pathways
+subset_ssGSEA <- exprMatrix_dense[top_20_pathways, ]
+```
+```{r}
+# Subset top 20 significant pathways
+subset_ssGSEA <- ssGSEA_scores[top_20_pathways, ]
+
+# Verify dimensions
+dim(subset_ssGSEA)  # Should be [20 x number of samples]
+# View metadata from the Seurat object
+head(all_int@meta.data)
+
+# Check if there is a column for patient samples (e.g., "sample")
+table(all_int@meta.data$sample)  # Replace "sample" with the actual column name if different
+
+```
+
+```{r}
+# Extract sample information from metadata
+cell_to_patient <- all_int@meta.data$sample  # Replace "sample" with the actual column name
+
+# Ensure rownames of metadata match colnames of subset_ssGSEA
+rownames(all_int@meta.data) <- colnames(subset_ssGSEA)
+
+# Aggregate pathway scores by patient
+library(dplyr)
+aggregated_scores <- as.data.frame(subset_ssGSEA) %>%
+    t() %>%  # Transpose so rows = cells and columns = pathways
+    as.data.frame() %>%
+    mutate(Patient = cell_to_patient) %>%
+    group_by(Patient) %>%
+    summarise(across(everything(), mean))
+
+# Convert back to matrix format for heatmap
+rownames(aggregated_scores) <- aggregated_scores$Patient
+aggregated_scores <- as.matrix(aggregated_scores[, -1])  # Remove "Patient" column
+
+# Transpose the matrix so rows represent samples and columns represent pathways
+subset_ssGSEA <- t(subset_ssGSEA)
+
+# Aggregate scores by patient groups
+aggregated_scores <- aggregate(subset_ssGSEA, by = list(metadata$sample), FUN = mean)
+rownames(aggregated_scores) <- aggregated_scores$Group.1  # Add patient names as rownames
+aggregated_scores <- aggregated_scores[, -1]  # Remove grouping column
+```
+```{r}
+library(pheatmap)
+
+pheatmap(aggregated_scores,
+         cluster_rows = TRUE,
+         cluster_cols = TRUE,
+         scale = "row",
+         show_rownames = TRUE,
+         show_colnames = TRUE,
+         color = colorRampPalette(c("blue", "white", "red"))(50),
+         main = "Pathway Activity Heatmap: Primary vs Relapse")
+
+```
+
+```{r}
+# Select top 100 significant pathways
+top_100_pathways <- rownames(filtered_primary)[sorted_indices[1:100]]
+
+# Subset matrix for top pathways
+subset_ssGSEA <- ssGSEA_scores[top_100_pathways, ]
+
+# Extract sample information from metadata
+cell_to_patient <- all_int@meta.data$sample  # Replace "sample" with the actual column name
+
+# Ensure rownames of metadata match colnames of subset_ssGSEA
+rownames(all_int@meta.data) <- colnames(subset_ssGSEA)
+
+# Aggregate pathway scores by patient
+library(dplyr)
+aggregated_scores <- as.data.frame(subset_ssGSEA) %>%
+    t() %>%  # Transpose so rows = cells and columns = pathways
+    as.data.frame() %>%
+    mutate(Patient = cell_to_patient) %>%
+    group_by(Patient) %>%
+    summarise(across(everything(), mean))
+
+# Convert back to matrix format for heatmap
+rownames(aggregated_scores) <- aggregated_scores$Patient
+aggregated_scores <- as.matrix(aggregated_scores[, -1])  # Remove "Patient" column
+
+# Transpose the matrix so rows represent samples and columns represent pathways
+subset_ssGSEA <- t(subset_ssGSEA)
+
+# Aggregate scores by patient groups
+aggregated_scores <- aggregate(subset_ssGSEA, by = list(metadata$sample), FUN = mean)
+rownames(aggregated_scores) <- aggregated_scores$Group.1  # Add patient names as rownames
+aggregated_scores <- aggregated_scores[, -1]  # Remove grouping column
+
+library(pheatmap)
+
+pheatmap(aggregated_scores,
+         cluster_rows = TRUE,
+         cluster_cols = TRUE,
+         scale = "row",
+         show_rownames = TRUE,
+         show_colnames = TRUE,
+         color = colorRampPalette(c("blue", "white", "red"))(50),
+         main = "Pathway Activity Heatmap: Primary vs Relapse")
+```
+
