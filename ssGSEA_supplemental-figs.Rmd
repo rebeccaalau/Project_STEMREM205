@@ -1,0 +1,186 @@
+---
+title: "ssGSEA_4"
+output: html_document
+date: "2025-03-12"
+---
+
+```{r setup, include=FALSE}
+# Load necessary libraries
+library(Seurat)
+library(msigdbr)
+library(ggplot2)
+library(dplyr)
+library(GSVA)
+```
+
+```{r}
+# Load your data
+all_int <- readRDS('ALL_ann_int_data.rds')
+
+# Extract metadata
+data_metadata <- all_int@meta.data
+
+# Filter relapse and primary samples based on the sample column
+relapse_samples <- rownames(data_metadata[grep("^R", data_metadata$sample), ])
+primary_samples <- rownames(data_metadata[grep("^P", data_metadata$sample), ])
+
+# Extract expression matrix
+exprMatrix <- LayerData(all_int, assay = "RNA", layer = "data")
+exprMatrix_dense <- as.matrix(exprMatrix)
+
+# Subset expression matrix for relapse and primary samples
+exprMatrix_relapse <- exprMatrix_dense[, relapse_samples]
+exprMatrix_primary <- exprMatrix_dense[, primary_samples]
+
+# Load Hallmark gene sets
+Hallmark <- msigdbr(species = "Homo sapiens", category = "H")
+Hallmark_gene_sets <- split(Hallmark$gene_symbol, Hallmark$gs_name)
+
+# Create ssGSEA parameter objects for relapse and primary samples
+ssgsea_param_relapse <- ssgseaParam(exprData = exprMatrix_relapse, geneSets = Hallmark_gene_sets)
+ssgsea_param_primary <- ssgseaParam(exprData = exprMatrix_primary, geneSets = Hallmark_gene_sets)
+
+# Perform ssGSEA using the parameter objects
+ssGSEA_scores_relapse <- gsva(ssgsea_param_relapse, verbose = TRUE)
+ssGSEA_scores_primary <- gsva(ssgsea_param_primary, verbose = TRUE)
+
+# Calculate the difference in ssGSEA scores between relapse and primary samples
+diff_ssGSEA <- rowMeans(ssGSEA_scores_relapse) - rowMeans(ssGSEA_scores_primary)
+
+# Identify the top pathways by the absolute difference in ssGSEA scores
+top_50_pathways <- names(diff_ssGSEA)[order(abs(diff_ssGSEA), decreasing = TRUE)[1:50]]
+
+# Subset ssGSEA scores for top pathways
+subset_ssGSEA_relapse <- ssGSEA_scores_relapse[top_50_pathways, ]
+subset_ssGSEA_primary <- ssGSEA_scores_primary[top_50_pathways, ]
+
+# Boxplots for Top Pathways ----------------------------------------------
+for (pathway in top_50_pathways) {
+  pathway_scores <- data.frame(
+    Score = c(subset_ssGSEA_relapse[pathway, ], subset_ssGSEA_primary[pathway, ]),
+    Group = c(rep("Relapse", ncol(subset_ssGSEA_relapse)), rep("Primary", ncol(subset_ssGSEA_primary)))
+  )
+  
+  # Create ggplot object
+  p <- ggplot(pathway_scores, aes(x = Group, y = Score, fill = Group)) +
+    geom_boxplot() +
+    theme_minimal() +
+    labs(title = paste("Pathway Activity:", pathway), y = "ssGSEA Score") +
+    scale_fill_manual(values = c("Primary" = "#56B4E9", "Relapse" = "#E69F00")) +
+    theme(plot.title = element_text(hjust = 0.5))
+  
+  # Save plot
+  ggsave(filename = paste0(pathway, "_boxplot.png"), plot = p, width = 8, height = 6)
+}
+
+# Dotplots for Specific Pathways -----------------------------------------
+# Generate dotplot for HALLMARK_P53_PATHWAY
+pathway <- "HALLMARK_P53_PATHWAY"
+
+pathway_scores <- data.frame(
+  Score = c(subset_ssGSEA_relapse[pathway, ], subset_ssGSEA_primary[pathway, ]),
+  Group = c(rep("Relapse", ncol(subset_ssGSEA_relapse)), rep("Primary", ncol(subset_ssGSEA_primary)))
+)
+
+# Create dotplot
+p_dot <- ggplot(pathway_scores, aes(x = Group, y = Score)) +
+  geom_point(aes(color = Group), position = position_jitter(width = 0.1)) +
+  theme_minimal() +
+  labs(title = paste("Pathway Activity:", pathway), y = "ssGSEA Score") +
+  scale_color_manual(values = c("Primary" = "#56B4E9", "Relapse" = "#E69F00")) +
+  theme(plot.title = element_text(hjust = 0.5))
+
+# Save dotplot
+ggsave(filename = paste0(pathway, "_dotplot.png"), plot = p_dot, width = 8, height = 6)
+
+# Heatmap of Pathway Activity --------------------------------------------
+library(pheatmap)
+
+# Combine primary and relapse scores for significant pathways
+combined_scores <- cbind(
+  Primary_Avg = rowMeans(subset_ssGSEA_primary[top_50_pathways, ]),
+  Relapse_Avg = rowMeans(subset_ssGSEA_relapse[top_50_pathways, ])
+)
+
+# Generate heatmap
+pheatmap(combined_scores,
+         cluster_rows = TRUE,
+         cluster_cols = TRUE,
+         scale = "row",
+         color = colorRampPalette(c("blue", "white", "red"))(50),
+         main = "Pathway Activity Heatmap: Primary vs Relapse",
+         show_rownames = TRUE,
+         show_colnames = TRUE)
+
+# Enrichment Visualization Using clusterProfiler -------------------------
+library(clusterProfiler)
+library(enrichplot)
+library(org.Hs.eg.db)
+
+# Perform enrichment analysis on significant pathways (example: GO analysis)
+ego <- enrichGO(gene         = rownames(exprMatrix_dense),
+                OrgDb        = org.Hs.eg.db,
+                keyType      = "SYMBOL",
+                ont          = "BP",
+                pAdjustMethod= "BH",
+                qvalueCutoff= 0.05)
+
+# Generate enrichment dot plot
+dot_plot <- dotplot(ego) + ggtitle("Dotplot for Enriched Pathways")
+ggsave(filename="enrichment_dotplot.png", plot=dot_plot, width=8, height=6)
+
+# Generate network plot
+network_plot <- cnetplot(ego, circular=TRUE) + ggtitle("Network Plot for Enriched Pathways")
+ggsave(filename="enrichment_network_plot.png", plot=network_plot, width=8, height=6)
+
+# Enrichment Analysis and Visualization for HALLMARK_P53_PATHWAY ----------------
+```
+
+```{r}
+# Extract genes from HALLMARK_P53_PATHWAY
+p53_genes <- Hallmark_gene_sets[["HALLMARK_P53_PATHWAY"]]
+
+# Perform GO enrichment analysis for p53 genes
+ego_p53 <- enrichGO(
+  gene         = p53_genes,
+  OrgDb        = org.Hs.eg.db,
+  keyType      = "SYMBOL",
+  ont          = "BP", # Biological Process
+  pAdjustMethod= "BH",
+  qvalueCutoff = 0.05
+)
+
+# Generate GO dot plot for HALLMARK_P53_PATHWAY
+dot_plot_p53 <- dotplot(ego_p53, showCategory = 10, title = "GO Dot Plot for HALLMARK_P53_PATHWAY") +
+  theme(plot.title = element_text(hjust = 0.5))
+
+# Save dot plot
+ggsave(filename = "HALLMARK_P53_PATHWAY_GO_dotplot.png", plot = dot_plot_p53, width = 8, height = 6)
+
+# Generate GO network plot for HALLMARK_P53_PATHWAY
+network_plot_p53 <- cnetplot(ego_p53, circular = TRUE, colorEdge = TRUE) +
+  ggtitle("GO Network Plot for HALLMARK_P53_PATHWAY") +
+  theme(plot.title = element_text(hjust = 0.5))
+
+# Save network plot
+ggsave(filename = "HALLMARK_P53_PATHWAY_GO_network_plot.png", plot = network_plot_p53, width = 8, height = 6)
+
+# GSEA Enrichment Plot ----------------------------------------------------------
+
+# Load necessary libraries
+library(fgsea)
+library(ggplot2)
+
+# Ensure proper ranked gene list
+ranked_gene_list <- sort(diff_ssGSEA, decreasing = TRUE)
+ranked_gene_list <- ranked_gene_list[!is.na(ranked_gene_list)] # Remove NA values
+
+# Perform GSEA using fgseaMultilevel (no nperm argument)
+fgsea_results <- fgseaMultilevel(
+  pathways = Hallmark_gene_sets,
+  stats = ranked_gene_list,
+  minSize = 15,
+  maxSize = 500
+)
+
+```
