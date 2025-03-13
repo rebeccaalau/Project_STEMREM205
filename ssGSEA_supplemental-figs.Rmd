@@ -93,56 +93,15 @@ p_dot <- ggplot(pathway_scores, aes(x = Group, y = Score)) +
 # Save dotplot
 ggsave(filename = paste0(pathway, "_dotplot.png"), plot = p_dot, width = 8, height = 6)
 
-# Heatmap of Pathway Activity --------------------------------------------
-library(pheatmap)
-
-# Combine primary and relapse scores for significant pathways
-combined_scores <- cbind(
-  Primary_Avg = rowMeans(subset_ssGSEA_primary[top_50_pathways, ]),
-  Relapse_Avg = rowMeans(subset_ssGSEA_relapse[top_50_pathways, ])
-)
-
-# Generate heatmap
-pheatmap(combined_scores,
-         cluster_rows = TRUE,
-         cluster_cols = TRUE,
-         scale = "row",
-         color = colorRampPalette(c("blue", "white", "red"))(50),
-         main = "Pathway Activity Heatmap: Primary vs Relapse",
-         show_rownames = TRUE,
-         show_colnames = TRUE)
-
-# Enrichment Visualization Using clusterProfiler -------------------------
-library(clusterProfiler)
-library(enrichplot)
-library(org.Hs.eg.db)
-
-# Perform enrichment analysis on significant pathways (example: GO analysis)
-ego <- enrichGO(gene         = rownames(exprMatrix_dense),
-                OrgDb        = org.Hs.eg.db,
-                keyType      = "SYMBOL",
-                ont          = "BP",
-                pAdjustMethod= "BH",
-                qvalueCutoff= 0.05)
-
-# Generate enrichment dot plot
-dot_plot <- dotplot(ego) + ggtitle("Dotplot for Enriched Pathways")
-ggsave(filename="enrichment_dotplot.png", plot=dot_plot, width=8, height=6)
-
-# Generate network plot
-network_plot <- cnetplot(ego, circular=TRUE) + ggtitle("Network Plot for Enriched Pathways")
-ggsave(filename="enrichment_network_plot.png", plot=network_plot, width=8, height=6)
-
-# Enrichment Analysis and Visualization for HALLMARK_P53_PATHWAY ----------------
-```
-
-```{r}
 # Extract genes from HALLMARK_P53_PATHWAY
 p53_genes <- Hallmark_gene_sets[["HALLMARK_P53_PATHWAY"]]
 
-# Perform GO enrichment analysis for p53 genes
+# Filter my expression matrix for P53 pathway genes
+exprMatrix_p53 <- exprMatrix_dense[rownames(exprMatrix_dense) %in% p53_genes, ]
+
+# Perform GO enrichment analysis using filtered P53 genes from my data
 ego_p53 <- enrichGO(
-  gene         = p53_genes,
+  gene         = rownames(exprMatrix_p53), # Genes from your data that match P53 pathway
   OrgDb        = org.Hs.eg.db,
   keyType      = "SYMBOL",
   ont          = "BP", # Biological Process
@@ -150,37 +109,28 @@ ego_p53 <- enrichGO(
   qvalueCutoff = 0.05
 )
 
-# Generate GO dot plot for HALLMARK_P53_PATHWAY
 dot_plot_p53 <- dotplot(ego_p53, showCategory = 10, title = "GO Dot Plot for HALLMARK_P53_PATHWAY") +
-  theme(plot.title = element_text(hjust = 0.5))
+  theme(plot.title = element_text(hjust = 0.5)) +
+  scale_color_gradient(low = "#56B4E9", high = "#E69F00", name = "Adjusted P-value") # Blue-to-orange gradient with legend
 
-# Save dot plot
-ggsave(filename = "HALLMARK_P53_PATHWAY_GO_dotplot.png", plot = dot_plot_p53, width = 8, height = 6)
+ggsave(filename = "P53_GO_dotplot.png", plot = dot_plot_p53, width = 8, height = 6)
 
-# Generate GO network plot for HALLMARK_P53_PATHWAY
-network_plot_p53 <- cnetplot(ego_p53, circular = TRUE, colorEdge = TRUE) +
+
+# Generate network plot with p.adjust color bar
+network_plot_p53 <- cnetplot(
+  ego_p53,
+  circular = TRUE,
+  colorEdge = TRUE,
+  node_label = "all" # Ensures labels for all nodes
+) +
   ggtitle("GO Network Plot for HALLMARK_P53_PATHWAY") +
-  theme(plot.title = element_text(hjust = 0.5))
+  theme(plot.title = element_text(hjust = 0.5)) +
+  scale_color_gradientn(
+    colours = c("blue", "white", "red"),
+    name = "p.adjust"
+  ) # Adds p.adjust color legend
 
-# Save network plot
-ggsave(filename = "HALLMARK_P53_PATHWAY_GO_network_plot.png", plot = network_plot_p53, width = 8, height = 6)
-
-# GSEA Enrichment Plot ----------------------------------------------------------
-
-# Load necessary libraries
-library(fgsea)
-library(ggplot2)
-
-# Ensure proper ranked gene list
-ranked_gene_list <- sort(diff_ssGSEA, decreasing = TRUE)
-ranked_gene_list <- ranked_gene_list[!is.na(ranked_gene_list)] # Remove NA values
-
-# Perform GSEA using fgseaMultilevel (no nperm argument)
-fgsea_results <- fgseaMultilevel(
-  pathways = Hallmark_gene_sets,
-  stats = ranked_gene_list,
-  minSize = 15,
-  maxSize = 500
-)
+# Save the updated network plot
+ggsave(filename = "P53_GO_network_plot_with_legend.png", plot = network_plot_p53, width = 8, height = 6)
 
 ```
