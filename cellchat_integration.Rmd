@@ -1,0 +1,233 @@
+---
+title: "R Notebook - cellchat integration"
+output: html_notebook
+---
+
+
+```{r}
+# Load necessary libraries
+knitr::opts_chunk$set(echo = TRUE)
+library(Seurat)
+library(dplyr)
+library(ggplot2)
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+BiocManager::install("CellChat")
+
+```
+
+```{r}
+library(CellChat)
+library(patchwork)
+options(stringsAsFactors = FALSE)
+packageVersion("CellChat")  #First sanity - if this fails something is wrong
+
+```
+
+```{r}
+r_int <- readRDS('labeled_r_int.rds') # MANUAL INPUT - put filename here
+```
+
+```{r}
+r_int # View filetype see if necessary layers are present - need 'data' to be present!
+Layers(r_int)
+```
+
+```{r}
+#IF FILES ARE INTEGRATED JUST RUN - NO need to comment out code
+
+#data_r1 <- GetAssayData(r_int, layer = "data.r1") # Depending on filetype and if it is not fully integrated run this
+#data_r2 <- GetAssayData(r_int, layer = "data.r2")
+
+#genes_shared <- intersect(rownames(data_r1), rownames(data_r2))
+
+#data_r1 <- data_r1[genes_shared, , drop = FALSE]
+#data_r2 <- data_r2[genes_shared, , drop = FALSE]
+
+# Combine into a single matrix
+#data.input <- cbind(data_r1, data_r2)
+data.input <- GetAssayData(r_int, layer = "data")
+dim(data.input) # Output is the cize of your matrix
+```
+
+```{r}
+DimPlot(r_int, reduction = "umap", group.by = "cluster_labels", label = TRUE, repel = TRUE) +
+  ggtitle("UMAP with Relabeled Clusters") +
+  theme(text = element_text(size = 10),  # Adjust overall text size
+        plot.title = element_text(size = 12),  # Title font size
+        axis.text = element_text(size = 8),  # Axis label size
+        axis.title = element_text(size = 10)) +  # Axis title size
+  NoLegend() # Comment out if you want legend
+```
+
+```{r}
+meta <- data.frame(labels = Idents(r_int), row.names = names(Idents(r_int)))
+meta # View metadata - you should see cell types as labels
+```
+
+```{r} 
+#Most of the time this is unnecessary but it drops columns that are not labeled 
+meta <- meta[colnames(data.input), , drop = FALSE]
+```
+
+```{r}
+nrow(meta)  # Should be same - if not the same this code WILL CRASH
+ncol(data.input)
+```
+```{r}
+
+#If you did NOT annotate data and there are just numbers as your cell labels - cell chat will NOT accept 0 as a label - this just adds 10 to labels
+#meta$labels <- as.character(meta$labels)  
+#meta$labels <- as.numeric(meta$labels) + 10  # Shift all cluster numbers by 10
+#meta$labels <- as.factor(meta$labels)  
+```
+
+```{r}
+# Loads the full CellChatDB
+CellChatDB.use <- CellChatDB.human  # For human data
+cellchat@DB <- CellChatDB.use
+
+```
+
+```{r}
+# Subset the expression data of signaling genes for efficiency
+cellchat <- subsetData(cellchat)  
+
+# Increase number to speed up computation - 8 seems to work well
+future::plan("multisession", workers = 8)  
+
+cellchat <- identifyOverExpressedGenes(cellchat)
+cellchat <- identifyOverExpressedInteractions(cellchat)
+```
+
+```{r}
+#Sometimes you receive an error with computeCommunProb - This has to do with the data - I could not figure out a fix. If error occurs in this line, you might want to recluster
+# I think it has to do with small clusters with very limited communication. 
+
+cellchat <- computeCommunProb(cellchat)
+cellchat <- filterCommunication(cellchat, min.cells = 8) # Limits number of cell cells in communication
+cellchat <- computeCommunProbPathway(cellchat) #
+cellchat <- aggregateNet(cellchat)
+
+```
+
+```{r}
+groupSize <- as.numeric(table(cellchat@idents))  # Get the number of cells per group
+par(mfrow = c(1,2), xpd=TRUE)
+
+netVisual_circle(cellchat@net$count, vertex.weight = groupSize, weight.scale = T, label.edge= F, title.name = "Number of interactions") # Interactions between cell groups
+netVisual_circle(cellchat@net$weight, vertex.weight = groupSize, weight.scale = T, label.edge= F, title.name = "Interaction strength") # Interaction strength between cell groups
+
+```
+```{r}
+groupSize <- as.numeric(table(cellchat@idents))
+par(mfrow = c(1,2))  # Set up for two plots side by side
+netVisual_circle(cellchat@net$count, vertex.weight = groupSize, title.name = "Number of Interactions")
+netVisual_circle(cellchat@net$weight, vertex.weight = groupSize, title.name = "Interaction Strength")
+```
+```{r}
+cellchat@netP$pathways #Lists all of the present pathways within data
+```
+
+```{r}
+#Investigate Collagen signaling
+pathways.show <- c("COLLAGEN")  # Specify pathways of interest
+#Circular plot of FN1 and COLLAGEN communication networks
+netVisual_aggregate(cellchat, signaling = pathways.show, layout = "circle")
+# Circular plot of FN1 and COLLAGEN communication networks
+```
+
+```{r}
+# Extract COLLAGEN interactions
+collagen_strength_per_cluster <- subsetCommunication(cellchat, signaling = "COLLAGEN")
+
+# Summarize interaction strength for each ligand-receptor pair
+collagen_strength_sum <- aggregate(prob ~ source + target + ligand + receptor, data = collagen_strength_per_cluster, sum)
+
+# Sort by strongest interactions first
+collagen_strength_sum <- collagen_strength_sum[order(-collagen_strength_sum$prob), ]
+print(collagen_strength_sum)
+
+```
+```{r}
+#Investigate LAMININ signaling
+pathways.show <- c("SPP1")  # Specify pathways of interest
+netVisual_aggregate(cellchat, signaling = pathways.show, layout = "circle")
+```
+```{r}
+# Extract LAMININ interactions
+EPHA_strength_per_cluster <- subsetCommunication(cellchat, signaling = "EPHA")
+
+# Summarize interaction strength for each ligand-receptor pair per source-target cluster
+EPHA_strength_sum <- aggregate(prob ~ source + target + ligand + receptor, data = EPHA_strength_per_cluster, sum)
+
+# Sort by strongest interactions first
+EPHA_strength_sum <- EPHA_strength_sum[order(-EPHA_strength_sum$prob), ]
+print(EPHA_strength_sum)
+```
+
+
+```{r}
+#Investigate MIF (Macro-migratory inhibitory factor)
+pathways.show <- c("ncWNT")  # Specify pathways of interest
+netVisual_aggregate(cellchat, signaling = pathways.show, layout = "circle")
+# Circular plot of FN1 and COLLAGEN communication networks
+```
+```{r}
+#Print pathways involved and what cell types are playing a role
+# Extract MIF-related interactions
+ncWNT_strength_per_cluster <- subsetCommunication(cellchat, signaling = "ncWNT")
+
+# Summarize interaction strength for each ligand-receptor pair per source-target cluster
+ncWNT_strength_sum <- aggregate(prob ~ source + target + ligand + receptor, data = ncWNT_strength_per_cluster, sum)
+
+# View the summarized interaction strength including ligand-receptor pairs
+print(ncWNT_strength_sum)
+```
+
+```{r}
+#View ICAM 
+ICAM_strength_per_cluster <- subsetCommunication(cellchat, signaling = "ICAM")
+
+# Summary of interaction strength for  ligand-receptor pairs
+ICAM_strength_sum <- aggregate(prob ~ source + target + ligand + receptor, data = ICAM_strength_per_cluster, sum)
+ICAM_strength_sum <- ICAM_strength_sum[order(-ICAM_strength_sum$prob), ]
+print(ICAM_strength_sum)
+```
+```{r}
+#Investigate THBS - circle plot
+pathways.show <- c("THBS")  # Specify pathways of interest
+netVisual_aggregate(cellchat, signaling = pathways.show, layout = "circle")
+```
+```{r}
+# Extract THBS interactions
+THBS_strength_per_cluster <- subsetCommunication(cellchat, signaling = "THBS")
+THBS_strength_sum <- aggregate(prob ~ source + target + ligand + receptor, data = THBS_strength_per_cluster, sum)
+
+# Sort by interaction strength
+THBS_strength_sum <- THBS_strength_sum[order(-THBS_strength_sum$prob), ]
+print(THBS_strength_sum)
+```
+
+```{r}
+# Identifies the strongest interaction within a specific cell type
+clusters_of_interest <- c("CSCs") #Manually change to a specific cluster of interest
+pathways_dormant_CSC <- subsetCommunication(cellchat, sources.use = clusters_of_interest)
+head(pathways_dormant_CSC)
+
+```
+
+```{r}
+# View the strength of the pathways 
+pathway_strength <- apply(cellchat@netP$prob, 3, sum)
+pathway_strength_df <- data.frame(
+  pathway = names(pathway_strength),
+  strength = pathway_strength
+)
+
+# Sort pathways by strength
+pathway_strength_df <- pathway_strength_df[order(-pathway_strength_df$strength), ]
+print(pathway_strength_df)
+
+```
+
