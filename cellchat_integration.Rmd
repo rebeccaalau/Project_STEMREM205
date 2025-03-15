@@ -6,6 +6,9 @@ output: html_notebook
 
 ```{r}
 # Load necessary libraries
+
+#https://rdrr.io/github/sqjin/CellChat/f/tutorial/CellChat-vignette.Rmd - this tutorial greatly helped
+
 knitr::opts_chunk$set(echo = TRUE)
 library(Seurat)
 library(dplyr)
@@ -25,7 +28,7 @@ packageVersion("CellChat")  #First sanity - if this fails something is wrong
 ```
 
 ```{r}
-r_int <- readRDS('labeled_r_int.rds') # MANUAL INPUT - put filename here
+r_int <- readRDS('PRIMARY_ann_int_data.rds') # MANUAL INPUT - put filename here
 ```
 
 ```{r}
@@ -84,6 +87,7 @@ ncol(data.input)
 
 ```{r}
 # Loads the full CellChatDB
+cellchat <- createCellChat(object = data.input, meta = meta, group.by = "labels")
 CellChatDB.use <- CellChatDB.human  # For human data
 cellchat@DB <- CellChatDB.use
 
@@ -150,7 +154,7 @@ print(collagen_strength_sum)
 
 ```
 ```{r}
-#Investigate LAMININ signaling
+#Investigate SPP1 signaling
 pathways.show <- c("SPP1")  # Specify pathways of interest
 netVisual_aggregate(cellchat, signaling = pathways.show, layout = "circle")
 ```
@@ -169,19 +173,14 @@ print(EPHA_strength_sum)
 
 ```{r}
 #Investigate MIF (Macro-migratory inhibitory factor)
-pathways.show <- c("ncWNT")  # Specify pathways of interest
+pathways.show <- c("MIF")  # Specify pathways of interest
 netVisual_aggregate(cellchat, signaling = pathways.show, layout = "circle")
 # Circular plot of FN1 and COLLAGEN communication networks
 ```
 ```{r}
-#Print pathways involved and what cell types are playing a role
-# Extract MIF-related interactions
+#Investigate ncWNT signaling
 ncWNT_strength_per_cluster <- subsetCommunication(cellchat, signaling = "ncWNT")
-
-# Summarize interaction strength for each ligand-receptor pair per source-target cluster
 ncWNT_strength_sum <- aggregate(prob ~ source + target + ligand + receptor, data = ncWNT_strength_per_cluster, sum)
-
-# View the summarized interaction strength including ligand-receptor pairs
 print(ncWNT_strength_sum)
 ```
 
